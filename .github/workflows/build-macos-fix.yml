@@ -1,0 +1,53 @@
+name: Build OpenInTerminal for macOS
+
+on:
+  push:
+    branches: [fix/macos27-preferences-hotkeys]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Test preference persistence and sharing
+        run: Tests/SharedPreferences/run.sh
+      - name: Build the app
+        run: |
+          xcodebuild -quiet -workspace OpenInTerminal.xcworkspace \
+            -scheme OpenInTerminal -configuration Release \
+            -derivedDataPath build -destination 'generic/platform=macOS' \
+            ARCHS=arm64 CODE_SIGNING_ALLOWED=NO MACOSX_DEPLOYMENT_TARGET=12.0 build
+      - name: Sign and package the app
+        run: |
+          products=build/Build/Products/Release
+          app="$products/OpenInTerminal.app"
+          helper="$app/Contents/Library/LoginItems/OpenInTerminalHelper.app"
+          extension="$app/Contents/PlugIns/OpenInTerminalFinderExtension.appex"
+
+          mkdir -p "$(dirname "$helper")"
+          if [[ ! -d "$helper" ]]; then
+            ditto "$products/OpenInTerminalHelper.app" "$helper"
+          fi
+
+          find "$app" -type f -name '*.dylib' -exec codesign --force --sign - {} +
+          codesign --force --sign - "$app/Contents/Frameworks/OpenInTerminalCore.framework"
+          codesign --force --sign - "$helper"
+          codesign --force --sign - \
+            --entitlements OpenInTerminalFinderExtension/OpenInTerminalFinderExtension.entitlements \
+            "$extension"
+          codesign --force --sign - --entitlements OpenInTerminal/OpenInTerminal.entitlements "$app"
+          codesign --verify --strict --deep "$app"
+
+          ditto -c -k --keepParent "$app" OpenInTerminal-macOS-arm64.zip
+      - name: Upload the app
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: OpenInTerminal-macOS-arm64
+          path: OpenInTerminal-macOS-arm64.zip
+          if-no-files-found: error
